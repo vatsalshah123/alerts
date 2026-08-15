@@ -51,6 +51,13 @@ if os.path.exists(LOCAL_SECRETS_FILE):
     except Exception as _e:
         print(f"Warning: failed to load {LOCAL_SECRETS_FILE}: {_e}", file=sys.stderr)
 
+# Read required secrets from environment into module-level variables
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+EMAIL_FROM = os.environ.get("EMAIL_FROM")
+EMAIL_TO = os.environ.get("EMAIL_TO")
+
 PORTFOLIO_FILE = "portfolio.xlsx"
 # ------------------------------------------
 
@@ -297,7 +304,18 @@ def send_email(html_body):
     resp.raise_for_status()
 
 
+def _check_required_env_vars():
+    missing = [name for name, val in (("BOT_TOKEN", BOT_TOKEN), ("CHAT_ID", CHAT_ID), ("BREVO_API_KEY", BREVO_API_KEY), ("EMAIL_FROM", EMAIL_FROM), ("EMAIL_TO", EMAIL_TO)) if not val]
+    if missing:
+        print("Missing required environment variables:", ", ".join(missing), file=sys.stderr)
+        print("Make sure GitHub Actions secrets are set or secrets.local.json contains them.", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
+    # Fail early with a clear message if secrets are missing
+    _check_required_env_vars()
+
     holdings = load_portfolio(PORTFOLIO_FILE)
     rows, totals = compute_rows(holdings)
 
