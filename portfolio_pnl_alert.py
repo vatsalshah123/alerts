@@ -37,19 +37,12 @@ import json
 # Local secrets helper: if a secrets.local.json file exists in the repo root,
 # load its keys into environment variables (unless already set). This lets
 # developers keep a local ignored file with credentials for testing.
-LOCAL_SECRETS_FILE = "secrets.local.json"
-if os.path.exists(LOCAL_SECRETS_FILE):
-    try:
-        with open(LOCAL_SECRETS_FILE, "r", encoding="utf-8") as _f:
-            _local = json.load(_f)
-        for _k, _v in _local.items():
-            if _v is None:
-                continue
-            # do not overwrite already-set environment variables
-            if not os.environ.get(_k):
-                os.environ[_k] = str(_v)
-    except Exception as _e:
-        print(f"Warning: failed to load {LOCAL_SECRETS_FILE}: {_e}", file=sys.stderr)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token_here")
+CHAT_ID = os.environ.get("CHAT_ID", "your_chat_id_here")
+
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "your_gmail_address@gmail.com")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "your_address@hotmail.com")
+EMAIL_TO = os.environ.get("EMAIL_TO", "your_address@hotmail.com")
 
 PORTFOLIO_FILE = "portfolio.xlsx"
 # ------------------------------------------
