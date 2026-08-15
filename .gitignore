@@ -1,0 +1,82 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.venv/
+pip-wheel-metadata/
+dist/
+build/
+eggs/
+*.egg-info/
+.pytest_cache/
+coverage/
+.coverage
+coverage.xml
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+target/
+build/
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# IDEs
+.idea/
+.vscode/
+.classpath
+.project
+.settings/
+.cache/
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# Logs
+yarn-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.*
+.env.local
+secrets.env
+secrets.local.json
+secrets.local.*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Others
+Thumbs.db
+desktop.ini
+.DS_Store

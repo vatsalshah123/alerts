@@ -1,0 +1,29 @@
+name: Portfolio P&L Alert
+
+on:
+  schedule:
+    # Runs hourly, 9:15 AM to 3:15 PM IST (= 3:45 AM to 9:45 AM UTC), Mon-Fri
+    - cron: '45 3,4,5,6,7,8,9 * * 1-5'
+  workflow_dispatch:  # lets you trigger it manually from the Actions tab too
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run P&L alert
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python portfolio_pnl_alert.py
