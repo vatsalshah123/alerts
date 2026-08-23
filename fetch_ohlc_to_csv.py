@@ -4,8 +4,8 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime
 
-TICKERS = ["TCS.NS", "RELIANCE.NS"]
-CSV_PATH = "data/daily_ohlc.csv"
+TICKERS = ["SCOOBEEDAY.BO"]
+CSV_PATH = "data/daily_ohlc2.csv"
 
 def load_existing_keys():
     """Read existing (ticker, date) pairs to avoid duplicate rows."""
