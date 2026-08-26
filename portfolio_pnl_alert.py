@@ -220,7 +220,7 @@ def build_telegram_message(rows, totals):
 
     sym_w = max(6, min(10, max((len(r["symbol"]) for r in rows), default=6)))
 
-    header = f"{'SYMBOL':<{sym_w}} {'QTY':>6} {'BUY':>9} {'LTP':>9} {'P&L%':>8} {'TODAY%':>8}"
+    header = f"{'SYMBOL':<{sym_w}} {'QTY':>6} {'BUY':>9} {'LTP':>9} {'P&L%':>8} {'TODAY ₹':>11} {'TODAY%':>8}"
     sep = "-" * len(header)
     table_lines = [header, sep]
 
@@ -230,15 +230,20 @@ def build_telegram_message(rows, totals):
             continue
         qty_str = f"{r['qty']:g}"
         pnl_str = f"{r['pnl_pct']:+.2f}%"
-        day_str = f"{r['day_pct']:+.2f}%"
+        day_amt_str = f"{r['day_pnl']:+,.2f}"
+        day_pct_str = f"{r['day_pct']:+.2f}%"
         table_lines.append(
-            f"{r['symbol']:<{sym_w}} {qty_str:>6} {r['buy_price']:>9,.2f} {r['ltp']:>9,.2f} {pnl_str:>8} {day_str:>8}"
+            f"{r['symbol']:<{sym_w}} {qty_str:>6} {r['buy_price']:>9,.2f} {r['ltp']:>9,.2f} "
+            f"{pnl_str:>8} {day_amt_str:>11} {day_pct_str:>8}"
         )
 
     table_lines.append(sep)
     total_pnl_str = f"{totals['pnl_pct']:+.2f}%"
-    total_day_str = f"{totals['day_pct']:+.2f}%"
-    table_lines.append(f"{'TOTAL':<{sym_w}} {'':>6} {'':>9} {'':>9} {total_pnl_str:>8} {total_day_str:>8}")
+    total_day_amt_str = f"{totals['day_pnl']:+,.2f}"
+    total_day_pct_str = f"{totals['day_pct']:+.2f}%"
+    table_lines.append(
+        f"{'TOTAL':<{sym_w}} {'':>6} {'':>9} {'':>9} {total_pnl_str:>8} {total_day_amt_str:>11} {total_day_pct_str:>8}"
+    )
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
     total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
