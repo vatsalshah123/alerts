@@ -112,27 +112,49 @@ def merge_duplicate_holdings(holdings):
     return result
 
 
-def fetch_price(symbol, exchange):
+def fetch_quote(symbol, exchange):
+    """Returns (ltp, prev_close) for a symbol.
+    prev_close is the prior session's close, used to compute today's change."""
     ticker = symbol.strip().upper() + EXCHANGE_SUFFIX[exchange.upper()]
     t = yf.Ticker(ticker)
+
+    ltp = None
+    prev_close = None
 
     # fast_info reflects the latest traded price during market hours,
     # more current than the daily history bar.
     try:
-        price = t.fast_info.get("last_price")
+        fast = t.fast_info
+        price = fast.get("last_price")
         if price:
-            return round(float(price), 2)
+            ltp = round(float(price), 2)
+        prev = fast.get("previous_close")
+        if prev:
+            prev_close = round(float(prev), 2)
     except Exception:
         pass
 
-    # Fallback: most recent 1-minute bar (still current during market hours)
-    data = t.history(period="1d", interval="1m")
-    if data.empty:
-        # Market closed (weekend/holiday) - fall back to last daily close
+    if ltp is None or prev_close is None:
         data = t.history(period="5d")
         if data.empty:
             raise ValueError(f"No price data for {ticker}")
-    return round(float(data["Close"].iloc[-1]), 2)
+
+        if ltp is None:
+            # Most recent 1-minute bar (still current during market hours)
+            intraday = t.history(period="1d", interval="1m")
+            if not intraday.empty:
+                ltp = round(float(intraday["Close"].iloc[-1]), 2)
+            else:
+                # Market closed (weekend/holiday) - fall back to last daily close
+                ltp = round(float(data["Close"].iloc[-1]), 2)
+
+        if prev_close is None:
+            if len(data) >= 2:
+                prev_close = round(float(data["Close"].iloc[-2]), 2)
+            else:
+                prev_close = ltp  # no prior session available; treat day change as 0
+
+    return ltp, prev_close
 
 
 def compute_rows(holdings):
@@ -140,10 +162,12 @@ def compute_rows(holdings):
     rows = []
     total_invested = 0.0
     total_current = 0.0
+    total_prev_value = 0.0
+    total_day_pnl = 0.0
 
     for h in holdings:
         try:
-            ltp = fetch_price(h["symbol"], h["exchange"])
+            ltp, prev_close = fetch_quote(h["symbol"], h["exchange"])
         except Exception as e:
             rows.append({"symbol": h["symbol"], "error": str(e)})
             continue
@@ -153,8 +177,14 @@ def compute_rows(holdings):
         pnl = current - invested
         pnl_pct = (pnl / invested) * 100 if invested else 0
 
+        prev_value = h["qty"] * prev_close
+        day_pnl = current - prev_value
+        day_pct = ((ltp - prev_close) / prev_close) * 100 if prev_close else 0
+
         total_invested += invested
         total_current += current
+        total_prev_value += prev_value
+        total_day_pnl += day_pnl
 
         rows.append({
             "symbol": h["symbol"],
@@ -162,19 +192,25 @@ def compute_rows(holdings):
             "qty": h["qty"],
             "buy_price": h["buy_price"],
             "ltp": ltp,
+            "prev_close": prev_close,
             "invested": invested,
             "current": current,
             "pnl": pnl,
             "pnl_pct": pnl_pct,
+            "day_pnl": day_pnl,
+            "day_pct": day_pct,
         })
 
     total_pnl = total_current - total_invested
     total_pct = (total_pnl / total_invested) * 100 if total_invested else 0
+    total_day_pct = (total_day_pnl / total_prev_value) * 100 if total_prev_value else 0
     totals = {
         "invested": total_invested,
         "current": total_current,
         "pnl": total_pnl,
         "pnl_pct": total_pct,
+        "day_pnl": total_day_pnl,
+        "day_pct": total_day_pct,
     }
     return rows, totals
 
@@ -190,15 +226,19 @@ def build_telegram_message(rows, totals):
             lines.append("")
             continue
         arrow = "🟢" if r["pnl"] >= 0 else "🔴"
+        day_arrow = "🟢" if r["day_pnl"] >= 0 else "🔴"
         lines.append(f"{arrow} *{r['symbol']}* ({r['exchange']})")
         lines.append(f"    Qty {r['qty']:g}  •  Buy ₹{r['buy_price']:,.2f}  •  LTP ₹{r['ltp']:,.2f}")
         lines.append(f"    Total Investment ₹{r['invested']:,.2f}  •  Market Value ₹{r['current']:,.2f}")
         lines.append(f"    P&L ₹{r['pnl']:+,.2f} ({r['pnl_pct']:+.2f}%)")
+        lines.append(f"    {day_arrow} Today ₹{r['day_pnl']:+,.2f} ({r['day_pct']:+.2f}%)")
         lines.append("")
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
+    total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
     lines.append("──────────────")
     lines.append(f"{total_arrow} *Total P&L: ₹{totals['pnl']:+,.2f} ({totals['pnl_pct']:+.2f}%)*")
+    lines.append(f"{total_day_arrow} *Today: ₹{totals['day_pnl']:+,.2f} ({totals['day_pct']:+.2f}%)*")
     lines.append(f"Total Investment: ₹{totals['invested']:,.2f}")
     lines.append(f"Market Value: ₹{totals['current']:,.2f}")
 
@@ -213,12 +253,13 @@ def build_email_html(rows, totals):
         if "error" in r:
             row_html += (
                 f"<tr><td style='padding:8px;border-bottom:1px solid #eee;'>{r['symbol']}</td>"
-                f"<td colspan='8' style='padding:8px;border-bottom:1px solid #eee;color:#999;'>"
+                f"<td colspan='9' style='padding:8px;border-bottom:1px solid #eee;color:#999;'>"
                 f"price fetch failed</td></tr>"
             )
             continue
         color = "#1a7f37" if r["pnl"] >= 0 else "#cf222e"
         bg = "#f0fdf4" if r["pnl"] >= 0 else "#fef2f2"
+        day_color = "#1a7f37" if r["day_pnl"] >= 0 else "#cf222e"
         row_html += f"""
         <tr style="background:{bg};">
           <td style="padding:8px;border-bottom:1px solid #eee;">{r['symbol']} <span style="color:#888;font-size:12px;">({r['exchange']})</span></td>
@@ -229,9 +270,12 @@ def build_email_html(rows, totals):
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹{r['current']:,.2f}</td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{color};font-weight:600;">₹{r['pnl']:+,.2f}</td>
           <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{color};font-weight:600;">{r['pnl_pct']:+.2f}%</td>
+          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{day_color};font-weight:600;">₹{r['day_pnl']:+,.2f}</td>
+          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{day_color};font-weight:600;">{r['day_pct']:+.2f}%</td>
         </tr>"""
 
     total_color = "#1a7f37" if totals["pnl"] >= 0 else "#cf222e"
+    total_day_color = "#1a7f37" if totals["day_pnl"] >= 0 else "#cf222e"
 
     html = f"""
     <html><body style="font-family:Segoe UI,Arial,sans-serif;background:#f6f6f6;padding:20px;">
@@ -251,6 +295,8 @@ def build_email_html(rows, totals):
               <th style="padding:8px;text-align:right;">Market Value</th>
               <th style="padding:8px;text-align:right;">P&amp;L</th>
               <th style="padding:8px;text-align:right;">%</th>
+              <th style="padding:8px;text-align:right;">Today's P&amp;L</th>
+              <th style="padding:8px;text-align:right;">Today's %</th>
             </tr>
           </thead>
           <tbody>
@@ -264,6 +310,8 @@ def build_email_html(rows, totals):
               <td style="padding:10px 8px;text-align:right;">₹{totals['current']:,.2f}</td>
               <td style="padding:10px 8px;text-align:right;color:{total_color};">₹{totals['pnl']:+,.2f}</td>
               <td style="padding:10px 8px;text-align:right;color:{total_color};">{totals['pnl_pct']:+.2f}%</td>
+              <td style="padding:10px 8px;text-align:right;color:{total_day_color};">₹{totals['day_pnl']:+,.2f}</td>
+              <td style="padding:10px 8px;text-align:right;color:{total_day_color};">{totals['day_pct']:+.2f}%</td>
             </tr>
           </tbody>
         </table>
