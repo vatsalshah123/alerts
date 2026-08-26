@@ -2,3 +2,4 @@ yfinance
 requests
 openpyxl
 pandas
+reportlab

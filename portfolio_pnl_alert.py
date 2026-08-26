@@ -2,12 +2,12 @@
 Portfolio P&L Alert — Telegram + Email (both free)
 -----------------------------------------------------
 Reads holdings from portfolio.xlsx, fetches live NSE/BSE prices,
-computes P&L, and sends the summary to BOTH Telegram (nicely aligned
-table via monospace) and Email (real HTML table via Brevo, works great
-in Hotmail/Outlook/Gmail).
+computes P&L, and sends the summary to BOTH Telegram (headline summary
+message + a PDF attachment with the full per-stock table) and Email
+(real HTML table via Brevo, works great in Hotmail/Outlook/Gmail).
 
 SETUP:
-1. pip install yfinance requests openpyxl
+1. pip install -r requirements.txt
 2. Telegram: create a bot via @BotFather, get BOT_TOKEN + CHAT_ID (see README)
 3. Email: create a free Brevo account (brevo.com), verify a sender email,
    get an API key. No App Passwords / 2FA hassle needed. (see README)
@@ -25,10 +25,16 @@ portfolio.xlsx format (first sheet, header row required):
 import os
 import sys
 from datetime import datetime
+from io import BytesIO
 
 import requests
 import yfinance as yf
 from openpyxl import load_workbook
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import json
 
 # ---------------- CONFIG ----------------
@@ -216,51 +222,99 @@ def compute_rows(holdings):
 
 
 def build_telegram_message(rows, totals):
+    """Short headline summary for the chat message; the full per-stock
+    breakdown goes out separately as a PDF attachment (see build_pdf_report)."""
     timestamp = datetime.now().strftime("%d %b, %I:%M %p")
-
-    sym_w = max(6, min(10, max((len(r["symbol"]) for r in rows), default=6)))
-
-    header = f"{'SYMBOL':<{sym_w}} {'QTY':>6} {'BUY':>9} {'LTP':>9} {'P&L%':>8} {'TODAY ₹':>11} {'TODAY%':>8}"
-    sep = "-" * len(header)
-    table_lines = [header, sep]
-
-    for r in rows:
-        if "error" in r:
-            table_lines.append(f"{r['symbol']:<{sym_w}} {'fetch failed':>{len(header) - sym_w - 1}}")
-            continue
-        qty_str = f"{r['qty']:g}"
-        pnl_str = f"{r['pnl_pct']:+.2f}%"
-        day_amt_str = f"{r['day_pnl']:+,.2f}"
-        day_pct_str = f"{r['day_pct']:+.2f}%"
-        table_lines.append(
-            f"{r['symbol']:<{sym_w}} {qty_str:>6} {r['buy_price']:>9,.2f} {r['ltp']:>9,.2f} "
-            f"{pnl_str:>8} {day_amt_str:>11} {day_pct_str:>8}"
-        )
-
-    table_lines.append(sep)
-    total_pnl_str = f"{totals['pnl_pct']:+.2f}%"
-    total_day_amt_str = f"{totals['day_pnl']:+,.2f}"
-    total_day_pct_str = f"{totals['day_pct']:+.2f}%"
-    table_lines.append(
-        f"{'TOTAL':<{sym_w}} {'':>6} {'':>9} {'':>9} {total_pnl_str:>8} {total_day_amt_str:>11} {total_day_pct_str:>8}"
-    )
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
     total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
+    failed = [r["symbol"] for r in rows if "error" in r]
 
     lines = [
         f"📊 *Portfolio P&L* — _{timestamp}_",
         "",
-        "```",
-        "\n".join(table_lines),
-        "```",
-        "",
         f"{total_arrow} *Total P&L: ₹{totals['pnl']:+,.2f} ({totals['pnl_pct']:+.2f}%)*",
         f"{total_day_arrow} *Today: ₹{totals['day_pnl']:+,.2f} ({totals['day_pct']:+.2f}%)*",
         f"Investment: ₹{totals['invested']:,.2f}  •  Value: ₹{totals['current']:,.2f}",
+        "",
+        "📄 Full stock-wise breakdown attached as PDF.",
     ]
+    if failed:
+        lines.append(f"⚠️ Price fetch failed for: {', '.join(failed)}")
 
     return "\n".join(lines)
+
+
+def build_pdf_report(rows, totals):
+    """Builds a formatted PDF with the full per-stock P&L table, for
+    a properly rendered table regardless of the viewer's device/app."""
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        topMargin=12 * mm, bottomMargin=12 * mm, leftMargin=10 * mm, rightMargin=10 * mm,
+    )
+    styles = getSampleStyleSheet()
+    timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
+
+    green = colors.HexColor("#1a7f37")
+    red = colors.HexColor("#cf222e")
+
+    header = ["Symbol", "Exch", "Qty", "Buy Price", "LTP", "Invested", "Value", "P&L", "P&L %", "Today P&L", "Today %"]
+    data = [header]
+    cell_colors = []  # (row, col, color)
+
+    for i, r in enumerate(rows, start=1):
+        if "error" in r:
+            data.append([r["symbol"], "", "", "", "", "", "", "price fetch failed", "", "", ""])
+            continue
+        data.append([
+            r["symbol"], r["exchange"], f"{r['qty']:g}",
+            f"{r['buy_price']:,.2f}", f"{r['ltp']:,.2f}",
+            f"{r['invested']:,.2f}", f"{r['current']:,.2f}",
+            f"{r['pnl']:+,.2f}", f"{r['pnl_pct']:+.2f}%",
+            f"{r['day_pnl']:+,.2f}", f"{r['day_pct']:+.2f}%",
+        ])
+        pnl_color = green if r["pnl"] >= 0 else red
+        day_color = green if r["day_pnl"] >= 0 else red
+        cell_colors += [(i, 7, pnl_color), (i, 8, pnl_color), (i, 9, day_color), (i, 10, day_color)]
+
+    total_row = len(data)
+    data.append([
+        "TOTAL", "", "", "", "",
+        f"{totals['invested']:,.2f}", f"{totals['current']:,.2f}",
+        f"{totals['pnl']:+,.2f}", f"{totals['pnl_pct']:+.2f}%",
+        f"{totals['day_pnl']:+,.2f}", f"{totals['day_pct']:+.2f}%",
+    ])
+    total_pnl_color = green if totals["pnl"] >= 0 else red
+    total_day_color = green if totals["day_pnl"] >= 0 else red
+
+    table = Table(data, repeatRows=1)
+    style = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, total_row), (-1, total_row), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+        ("ALIGN", (0, 0), (1, -1), "LEFT"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, total_row - 1), [colors.white, colors.HexColor("#f7f7fb")]),
+        ("BACKGROUND", (0, total_row), (-1, total_row), colors.HexColor("#f0f0f5")),
+        ("TEXTCOLOR", (7, total_row), (8, total_row), total_pnl_color),
+        ("TEXTCOLOR", (9, total_row), (10, total_row), total_day_color),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    for row, col, color in cell_colors:
+        style.append(("TEXTCOLOR", (col, row), (col, row), color))
+    table.setStyle(TableStyle(style))
+
+    elements = [
+        Paragraph(f"<b>Portfolio P&amp;L — {timestamp}</b>", styles["Title"]),
+        Spacer(1, 8),
+        table,
+    ]
+    doc.build(elements)
+    return buf.getvalue()
 
 
 def build_email_html(rows, totals):
@@ -345,6 +399,16 @@ def send_telegram(text):
     resp.raise_for_status()
 
 
+def send_telegram_document(file_bytes, filename, caption=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    data = {"chat_id": CHAT_ID}
+    if caption:
+        data["caption"] = caption
+    files = {"document": (filename, file_bytes, "application/pdf")}
+    resp = requests.post(url, data=data, files=files)
+    resp.raise_for_status()
+
+
 def send_email(html_body):
     subject = f"Portfolio P&L — {datetime.now().strftime('%d %b, %I:%M %p')}"
     url = "https://api.brevo.com/v3/smtp/email"
@@ -380,6 +444,7 @@ def main():
 
     telegram_text = build_telegram_message(rows, totals)
     email_html = build_email_html(rows, totals)
+    pdf_bytes = build_pdf_report(rows, totals)
 
     print(telegram_text)  # for local testing visibility
 
@@ -388,6 +453,13 @@ def main():
         print("✅ Telegram sent.")
     except Exception as e:
         print(f"⚠️ Telegram failed: {e}", file=sys.stderr)
+
+    try:
+        pdf_filename = f"portfolio_pnl_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        send_telegram_document(pdf_bytes, pdf_filename)
+        print("✅ Telegram PDF sent.")
+    except Exception as e:
+        print(f"⚠️ Telegram PDF failed: {e}", file=sys.stderr)
 
     try:
         send_email(email_html)
