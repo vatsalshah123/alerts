@@ -26,6 +26,7 @@ import os
 import sys
 from datetime import datetime
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
@@ -61,6 +62,13 @@ PORTFOLIO_FILE = "portfolio.xlsx"
 # ------------------------------------------
 
 EXCHANGE_SUFFIX = {"NSE": ".NS", "BSE": ".BO"}
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def now_ist():
+    """GitHub Actions runners run in UTC — always report timestamps in IST."""
+    return datetime.now(IST)
 
 
 def load_portfolio(path):
@@ -224,7 +232,7 @@ def compute_rows(holdings):
 def build_telegram_message(rows, totals):
     """Short headline summary for the chat message; the full per-stock
     breakdown goes out separately as a PDF attachment (see build_pdf_report)."""
-    timestamp = datetime.now().strftime("%d %b, %I:%M %p")
+    timestamp = now_ist().strftime("%d %b, %I:%M %p IST")
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
     total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
@@ -312,7 +320,7 @@ def build_pdf_report(rows, totals):
         topMargin=12 * mm, bottomMargin=12 * mm, leftMargin=10 * mm, rightMargin=10 * mm,
     )
     styles = getSampleStyleSheet()
-    timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
+    timestamp = now_ist().strftime("%d %b %Y, %I:%M %p IST")
 
     green = colors.HexColor("#1a7f37")
     red = colors.HexColor("#cf222e")
@@ -370,7 +378,7 @@ def build_pdf_report(rows, totals):
 
 
 def build_email_html(rows, totals):
-    timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
+    timestamp = now_ist().strftime("%d %b %Y, %I:%M %p IST")
 
     body, total_row = format_report_rows(rows, totals)
     n_cols = len(REPORT_COLUMNS)
@@ -451,7 +459,7 @@ def send_telegram_document(file_bytes, filename, caption=None):
 
 
 def send_email(html_body):
-    subject = f"Portfolio P&L — {datetime.now().strftime('%d %b, %I:%M %p')}"
+    subject = f"Portfolio P&L — {now_ist().strftime('%d %b, %I:%M %p IST')}"
     url = "https://api.brevo.com/v3/smtp/email"
     headers = {
         "api-key": BREVO_API_KEY,
@@ -496,7 +504,7 @@ def main():
         print(f"⚠️ Telegram failed: {e}", file=sys.stderr)
 
     try:
-        pdf_filename = f"portfolio_pnl_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        pdf_filename = f"portfolio_pnl_{now_ist().strftime('%Y%m%d_%H%M')}.pdf"
         send_telegram_document(pdf_bytes, pdf_filename)
         print("✅ Telegram PDF sent.")
     except Exception as e:
