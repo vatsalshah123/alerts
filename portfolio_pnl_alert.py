@@ -218,29 +218,39 @@ def compute_rows(holdings):
 def build_telegram_message(rows, totals):
     timestamp = datetime.now().strftime("%d %b, %I:%M %p")
 
-    lines = [f"📊 *Portfolio P&L*", f"_{timestamp}_", ""]
+    sym_w = max(8, min(14, max((len(r["symbol"]) for r in rows), default=8)))
+
+    header = f"{'SYMBOL':<{sym_w}} {'LTP':>10} {'P&L%':>9} {'TODAY%':>9}"
+    sep = "-" * len(header)
+    table_lines = [header, sep]
 
     for r in rows:
         if "error" in r:
-            lines.append(f"⚠️ *{r['symbol']}* — price fetch failed")
-            lines.append("")
+            table_lines.append(f"{r['symbol']:<{sym_w}} {'fetch failed':>30}")
             continue
-        arrow = "🟢" if r["pnl"] >= 0 else "🔴"
-        day_arrow = "🟢" if r["day_pnl"] >= 0 else "🔴"
-        lines.append(f"{arrow} *{r['symbol']}* ({r['exchange']})")
-        lines.append(f"    Qty {r['qty']:g}  •  Buy ₹{r['buy_price']:,.2f}  •  LTP ₹{r['ltp']:,.2f}")
-        lines.append(f"    Total Investment ₹{r['invested']:,.2f}  •  Market Value ₹{r['current']:,.2f}")
-        lines.append(f"    P&L ₹{r['pnl']:+,.2f} ({r['pnl_pct']:+.2f}%)")
-        lines.append(f"    {day_arrow} Today ₹{r['day_pnl']:+,.2f} ({r['day_pct']:+.2f}%)")
-        lines.append("")
+        pnl_str = f"{r['pnl_pct']:+.2f}%"
+        day_str = f"{r['day_pct']:+.2f}%"
+        table_lines.append(f"{r['symbol']:<{sym_w}} {r['ltp']:>10,.2f} {pnl_str:>9} {day_str:>9}")
+
+    table_lines.append(sep)
+    total_pnl_str = f"{totals['pnl_pct']:+.2f}%"
+    total_day_str = f"{totals['day_pct']:+.2f}%"
+    table_lines.append(f"{'TOTAL':<{sym_w}} {'':>10} {total_pnl_str:>9} {total_day_str:>9}")
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
     total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
-    lines.append("──────────────")
-    lines.append(f"{total_arrow} *Total P&L: ₹{totals['pnl']:+,.2f} ({totals['pnl_pct']:+.2f}%)*")
-    lines.append(f"{total_day_arrow} *Today: ₹{totals['day_pnl']:+,.2f} ({totals['day_pct']:+.2f}%)*")
-    lines.append(f"Total Investment: ₹{totals['invested']:,.2f}")
-    lines.append(f"Market Value: ₹{totals['current']:,.2f}")
+
+    lines = [
+        f"📊 *Portfolio P&L* — _{timestamp}_",
+        "",
+        "```",
+        "\n".join(table_lines),
+        "```",
+        "",
+        f"{total_arrow} *Total P&L: ₹{totals['pnl']:+,.2f} ({totals['pnl_pct']:+.2f}%)*",
+        f"{total_day_arrow} *Today: ₹{totals['day_pnl']:+,.2f} ({totals['day_pct']:+.2f}%)*",
+        f"Investment: ₹{totals['invested']:,.2f}  •  Value: ₹{totals['current']:,.2f}",
+    ]
 
     return "\n".join(lines)
 
