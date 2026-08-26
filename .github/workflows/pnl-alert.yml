@@ -6,6 +6,10 @@ on:
     - cron: '45 3,4,5,6,7,8,9 * * 1-5'
   workflow_dispatch:  # lets you trigger it manually from the Actions tab too
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   send-alert:
     runs-on: ubuntu-latest
@@ -27,3 +31,22 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python portfolio_pnl_alert.py
+
+      - name: Prune workflow runs older than 1 day
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cutoff=$(date -u -d '1 day ago' +%s)
+          gh run list --workflow "pnl-alert.yml" --limit 500 --json databaseId,createdAt \
+            --jq '.[] | [.databaseId, .createdAt] | @tsv' |
+          while IFS=$'\t' read -r run_id created_at; do
+            if [ "$run_id" = "$GITHUB_RUN_ID" ]; then
+              continue
+            fi
+            run_ts=$(date -u -d "$created_at" +%s)
+            if [ "$run_ts" -lt "$cutoff" ]; then
+              echo "Deleting run $run_id (created $created_at)"
+              gh run delete "$run_id" || true
+            fi
+          done
