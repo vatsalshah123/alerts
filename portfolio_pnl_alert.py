@@ -218,24 +218,27 @@ def compute_rows(holdings):
 def build_telegram_message(rows, totals):
     timestamp = datetime.now().strftime("%d %b, %I:%M %p")
 
-    sym_w = max(8, min(14, max((len(r["symbol"]) for r in rows), default=8)))
+    sym_w = max(6, min(10, max((len(r["symbol"]) for r in rows), default=6)))
 
-    header = f"{'SYMBOL':<{sym_w}} {'LTP':>10} {'P&L%':>9} {'TODAY%':>9}"
+    header = f"{'SYMBOL':<{sym_w}} {'QTY':>6} {'BUY':>9} {'LTP':>9} {'P&L%':>8} {'TODAY%':>8}"
     sep = "-" * len(header)
     table_lines = [header, sep]
 
     for r in rows:
         if "error" in r:
-            table_lines.append(f"{r['symbol']:<{sym_w}} {'fetch failed':>30}")
+            table_lines.append(f"{r['symbol']:<{sym_w}} {'fetch failed':>{len(header) - sym_w - 1}}")
             continue
+        qty_str = f"{r['qty']:g}"
         pnl_str = f"{r['pnl_pct']:+.2f}%"
         day_str = f"{r['day_pct']:+.2f}%"
-        table_lines.append(f"{r['symbol']:<{sym_w}} {r['ltp']:>10,.2f} {pnl_str:>9} {day_str:>9}")
+        table_lines.append(
+            f"{r['symbol']:<{sym_w}} {qty_str:>6} {r['buy_price']:>9,.2f} {r['ltp']:>9,.2f} {pnl_str:>8} {day_str:>8}"
+        )
 
     table_lines.append(sep)
     total_pnl_str = f"{totals['pnl_pct']:+.2f}%"
     total_day_str = f"{totals['day_pct']:+.2f}%"
-    table_lines.append(f"{'TOTAL':<{sym_w}} {'':>10} {total_pnl_str:>9} {total_day_str:>9}")
+    table_lines.append(f"{'TOTAL':<{sym_w}} {'':>6} {'':>9} {'':>9} {total_pnl_str:>8} {total_day_str:>8}")
 
     total_arrow = "🟢" if totals["pnl"] >= 0 else "🔴"
     total_day_arrow = "🟢" if totals["day_pnl"] >= 0 else "🔴"
