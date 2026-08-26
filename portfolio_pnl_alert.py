@@ -245,6 +245,64 @@ def build_telegram_message(rows, totals):
     return "\n".join(lines)
 
 
+# Shared column definitions so the email table and the PDF table stay
+# in sync — same fields, same order, same green/red coloring rules.
+REPORT_COLUMNS = [
+    ("symbol", "Symbol", "left", None),
+    ("exchange", "Exch", "left", None),
+    ("qty", "Qty", "right", None),
+    ("buy_price", "Buy Price", "right", None),
+    ("ltp", "LTP", "right", None),
+    ("invested", "Total Investment", "right", None),
+    ("current", "Market Value", "right", None),
+    ("pnl", "P&L", "right", "pnl"),
+    ("pnl_pct", "P&L %", "right", "pnl"),
+    ("day_pnl", "Today's P&L", "right", "day"),
+    ("day_pct", "Today's %", "right", "day"),
+]
+
+
+def format_report_rows(rows, totals):
+    """Formats holdings + totals into the shared cell text/coloring used by
+    both the email table and the PDF table. Returns (body, total_row) where
+    body entries are either {"error": True, "symbol": ...} or
+    {"error": False, "cells": {col_key: text}, "pnl_positive": bool, "day_positive": bool}."""
+    body = []
+    for r in rows:
+        if "error" in r:
+            body.append({"error": True, "symbol": r["symbol"]})
+            continue
+        cells = {
+            "symbol": r["symbol"],
+            "exchange": r["exchange"],
+            "qty": f"{r['qty']:g}",
+            "buy_price": f"{r['buy_price']:,.2f}",
+            "ltp": f"{r['ltp']:,.2f}",
+            "invested": f"{r['invested']:,.2f}",
+            "current": f"{r['current']:,.2f}",
+            "pnl": f"{r['pnl']:+,.2f}",
+            "pnl_pct": f"{r['pnl_pct']:+.2f}%",
+            "day_pnl": f"{r['day_pnl']:+,.2f}",
+            "day_pct": f"{r['day_pct']:+.2f}%",
+        }
+        body.append({"error": False, "cells": cells, "pnl_positive": r["pnl"] >= 0, "day_positive": r["day_pnl"] >= 0})
+
+    total_row = {
+        "cells": {
+            "symbol": "TOTAL", "exchange": "", "qty": "", "buy_price": "", "ltp": "",
+            "invested": f"{totals['invested']:,.2f}",
+            "current": f"{totals['current']:,.2f}",
+            "pnl": f"{totals['pnl']:+,.2f}",
+            "pnl_pct": f"{totals['pnl_pct']:+.2f}%",
+            "day_pnl": f"{totals['day_pnl']:+,.2f}",
+            "day_pct": f"{totals['day_pct']:+.2f}%",
+        },
+        "pnl_positive": totals["pnl"] >= 0,
+        "day_positive": totals["day_pnl"] >= 0,
+    }
+    return body, total_row
+
+
 def build_pdf_report(rows, totals):
     """Builds a formatted PDF with the full per-stock P&L table, for
     a properly rendered table regardless of the viewer's device/app."""
@@ -259,51 +317,45 @@ def build_pdf_report(rows, totals):
     green = colors.HexColor("#1a7f37")
     red = colors.HexColor("#cf222e")
 
-    header = ["Symbol", "Exch", "Qty", "Buy Price", "LTP", "Invested", "Value", "P&L", "P&L %", "Today P&L", "Today %"]
-    data = [header]
+    body, total_row = format_report_rows(rows, totals)
+    n_cols = len(REPORT_COLUMNS)
+
+    data = [[label for _, label, _, _ in REPORT_COLUMNS]]
     cell_colors = []  # (row, col, color)
 
-    for i, r in enumerate(rows, start=1):
-        if "error" in r:
-            data.append([r["symbol"], "", "", "", "", "", "", "price fetch failed", "", "", ""])
+    for i, r in enumerate(body, start=1):
+        if r["error"]:
+            data.append([r["symbol"]] + [""] * (n_cols - 2) + ["price fetch failed"])
             continue
-        data.append([
-            r["symbol"], r["exchange"], f"{r['qty']:g}",
-            f"{r['buy_price']:,.2f}", f"{r['ltp']:,.2f}",
-            f"{r['invested']:,.2f}", f"{r['current']:,.2f}",
-            f"{r['pnl']:+,.2f}", f"{r['pnl_pct']:+.2f}%",
-            f"{r['day_pnl']:+,.2f}", f"{r['day_pct']:+.2f}%",
-        ])
-        pnl_color = green if r["pnl"] >= 0 else red
-        day_color = green if r["day_pnl"] >= 0 else red
-        cell_colors += [(i, 7, pnl_color), (i, 8, pnl_color), (i, 9, day_color), (i, 10, day_color)]
+        data.append([r["cells"][key] for key, _, _, _ in REPORT_COLUMNS])
+        for j, (key, _, _, group) in enumerate(REPORT_COLUMNS):
+            if group == "pnl":
+                cell_colors.append((i, j, green if r["pnl_positive"] else red))
+            elif group == "day":
+                cell_colors.append((i, j, green if r["day_positive"] else red))
 
-    total_row = len(data)
-    data.append([
-        "TOTAL", "", "", "", "",
-        f"{totals['invested']:,.2f}", f"{totals['current']:,.2f}",
-        f"{totals['pnl']:+,.2f}", f"{totals['pnl_pct']:+.2f}%",
-        f"{totals['day_pnl']:+,.2f}", f"{totals['day_pct']:+.2f}%",
-    ])
-    total_pnl_color = green if totals["pnl"] >= 0 else red
-    total_day_color = green if totals["day_pnl"] >= 0 else red
+    total_idx = len(data)
+    data.append([total_row["cells"][key] for key, _, _, _ in REPORT_COLUMNS])
+    for j, (key, _, _, group) in enumerate(REPORT_COLUMNS):
+        if group == "pnl":
+            cell_colors.append((total_idx, j, green if total_row["pnl_positive"] else red))
+        elif group == "day":
+            cell_colors.append((total_idx, j, green if total_row["day_positive"] else red))
 
     table = Table(data, repeatRows=1)
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME", (0, total_row), (-1, total_row), "Helvetica-Bold"),
+        ("FONTNAME", (0, total_idx), (-1, total_idx), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
-        ("ALIGN", (0, 0), (1, -1), "LEFT"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, total_row - 1), [colors.white, colors.HexColor("#f7f7fb")]),
-        ("BACKGROUND", (0, total_row), (-1, total_row), colors.HexColor("#f0f0f5")),
-        ("TEXTCOLOR", (7, total_row), (8, total_row), total_pnl_color),
-        ("TEXTCOLOR", (9, total_row), (10, total_row), total_day_color),
+        ("ROWBACKGROUNDS", (0, 1), (-1, total_idx - 1), [colors.white, colors.HexColor("#f7f7fb")]),
+        ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#f0f0f5")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]
+    for j, (_, _, align, _) in enumerate(REPORT_COLUMNS):
+        style.append(("ALIGN", (j, 0), (j, -1), align.upper()))
     for row, col, color in cell_colors:
         style.append(("TEXTCOLOR", (col, row), (col, row), color))
     table.setStyle(TableStyle(style))
@@ -320,34 +372,45 @@ def build_pdf_report(rows, totals):
 def build_email_html(rows, totals):
     timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
 
+    body, total_row = format_report_rows(rows, totals)
+    n_cols = len(REPORT_COLUMNS)
+
+    def cell_color(group, positive):
+        if group is None:
+            return ""
+        return "#1a7f37" if positive else "#cf222e"
+
     row_html = ""
-    for r in rows:
-        if "error" in r:
+    for r in body:
+        if r["error"]:
             row_html += (
                 f"<tr><td style='padding:8px;border-bottom:1px solid #eee;'>{r['symbol']}</td>"
-                f"<td colspan='9' style='padding:8px;border-bottom:1px solid #eee;color:#999;'>"
+                f"<td colspan='{n_cols - 1}' style='padding:8px;border-bottom:1px solid #eee;color:#999;'>"
                 f"price fetch failed</td></tr>"
             )
             continue
-        color = "#1a7f37" if r["pnl"] >= 0 else "#cf222e"
-        bg = "#f0fdf4" if r["pnl"] >= 0 else "#fef2f2"
-        day_color = "#1a7f37" if r["day_pnl"] >= 0 else "#cf222e"
-        row_html += f"""
-        <tr style="background:{bg};">
-          <td style="padding:8px;border-bottom:1px solid #eee;">{r['symbol']} <span style="color:#888;font-size:12px;">({r['exchange']})</span></td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">{r['qty']:g}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹{r['buy_price']:,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹{r['ltp']:,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹{r['invested']:,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">₹{r['current']:,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{color};font-weight:600;">₹{r['pnl']:+,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{color};font-weight:600;">{r['pnl_pct']:+.2f}%</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{day_color};font-weight:600;">₹{r['day_pnl']:+,.2f}</td>
-          <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;color:{day_color};font-weight:600;">{r['day_pct']:+.2f}%</td>
-        </tr>"""
+        bg = "#f0fdf4" if r["pnl_positive"] else "#fef2f2"
+        cells_html = ""
+        for key, _, align, group in REPORT_COLUMNS:
+            positive = r["pnl_positive"] if group == "pnl" else r["day_positive"]
+            color = cell_color(group, positive)
+            style = f"padding:8px;border-bottom:1px solid #eee;text-align:{align};"
+            if color:
+                style += f"color:{color};font-weight:600;"
+            cells_html += f'<td style="{style}">{r["cells"][key]}</td>'
+        row_html += f'<tr style="background:{bg};">{cells_html}</tr>'
 
-    total_color = "#1a7f37" if totals["pnl"] >= 0 else "#cf222e"
-    total_day_color = "#1a7f37" if totals["day_pnl"] >= 0 else "#cf222e"
+    header_html = "".join(
+        f'<th style="padding:8px;text-align:{align};">{label}</th>' for _, label, align, _ in REPORT_COLUMNS
+    )
+    total_cells_html = ""
+    for key, _, align, group in REPORT_COLUMNS:
+        positive = total_row["pnl_positive"] if group == "pnl" else total_row["day_positive"]
+        color = cell_color(group, positive)
+        style = f"padding:10px 8px;text-align:{align};"
+        if color:
+            style += f"color:{color};"
+        total_cells_html += f'<td style="{style}">{total_row["cells"][key]}</td>'
 
     html = f"""
     <html><body style="font-family:Segoe UI,Arial,sans-serif;background:#f6f6f6;padding:20px;">
@@ -358,33 +421,11 @@ def build_email_html(rows, totals):
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:14px;">
           <thead>
-            <tr style="background:#f0f0f5;text-align:right;">
-              <th style="padding:8px;text-align:left;">Stock</th>
-              <th style="padding:8px;text-align:right;">Qty</th>
-              <th style="padding:8px;text-align:right;">Buy Price</th>
-              <th style="padding:8px;text-align:right;">LTP</th>
-              <th style="padding:8px;text-align:right;">Total Investment</th>
-              <th style="padding:8px;text-align:right;">Market Value</th>
-              <th style="padding:8px;text-align:right;">P&amp;L</th>
-              <th style="padding:8px;text-align:right;">%</th>
-              <th style="padding:8px;text-align:right;">Today's P&amp;L</th>
-              <th style="padding:8px;text-align:right;">Today's %</th>
-            </tr>
+            <tr style="background:#f0f0f5;">{header_html}</tr>
           </thead>
           <tbody>
             {row_html}
-            <tr style="background:#f0f0f5;font-weight:700;">
-              <td style="padding:10px 8px;">TOTAL</td>
-              <td></td>
-              <td></td>
-              <td></td>
-              <td style="padding:10px 8px;text-align:right;">₹{totals['invested']:,.2f}</td>
-              <td style="padding:10px 8px;text-align:right;">₹{totals['current']:,.2f}</td>
-              <td style="padding:10px 8px;text-align:right;color:{total_color};">₹{totals['pnl']:+,.2f}</td>
-              <td style="padding:10px 8px;text-align:right;color:{total_color};">{totals['pnl_pct']:+.2f}%</td>
-              <td style="padding:10px 8px;text-align:right;color:{total_day_color};">₹{totals['day_pnl']:+,.2f}</td>
-              <td style="padding:10px 8px;text-align:right;color:{total_day_color};">{totals['day_pct']:+.2f}%</td>
-            </tr>
+            <tr style="background:#f0f0f5;font-weight:700;">{total_cells_html}</tr>
           </tbody>
         </table>
       </div>
