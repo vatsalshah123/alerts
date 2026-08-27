@@ -24,6 +24,7 @@ portfolio.xlsx format (first sheet, header row required):
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from io import BytesIO
 from zoneinfo import ZoneInfo
@@ -36,22 +37,9 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-import json
 
 # ---------------- CONFIG ----------------
 # All read from environment variables (set as GitHub Secrets in Actions).
-# Falls back to placeholder strings for local editing/testing.
-# Local secrets helper: if a secrets.local.json file exists in the repo root,
-# load its keys into environment variables (unless already set). This lets
-# developers keep a local ignored file with credentials for testing.
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token_here")
-CHAT_ID = os.environ.get("CHAT_ID", "your_chat_id_here")
-
-BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "your_gmail_address@gmail.com")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "your_address@hotmail.com")
-EMAIL_TO = os.environ.get("EMAIL_TO", "your_address@hotmail.com")
-
-# Read required secrets from environment into module-level variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
@@ -171,19 +159,32 @@ def fetch_quote(symbol, exchange):
     return ltp, prev_close
 
 
+def _fetch_quote_safe(symbol, exchange):
+    """fetch_quote wrapped for use with ThreadPoolExecutor.map, which can't
+    propagate a per-item exception without aborting the whole batch."""
+    try:
+        ltp, prev_close = fetch_quote(symbol, exchange)
+        return ltp, prev_close, None
+    except Exception as e:
+        return None, None, str(e)
+
+
 def compute_rows(holdings):
-    """Fetch prices and compute P&L for each holding. Returns rows + totals."""
+    """Fetch prices and compute P&L for each holding. Returns rows + totals.
+    Price fetches are independent network calls, so they run concurrently
+    instead of one after another."""
     rows = []
     total_invested = 0.0
     total_current = 0.0
     total_prev_value = 0.0
     total_day_pnl = 0.0
 
-    for h in holdings:
-        try:
-            ltp, prev_close = fetch_quote(h["symbol"], h["exchange"])
-        except Exception as e:
-            rows.append({"symbol": h["symbol"], "error": str(e)})
+    with ThreadPoolExecutor(max_workers=min(8, len(holdings) or 1)) as executor:
+        quotes = list(executor.map(lambda h: _fetch_quote_safe(h["symbol"], h["exchange"]), holdings))
+
+    for h, (ltp, prev_close, error) in zip(holdings, quotes):
+        if error is not None:
+            rows.append({"symbol": h["symbol"], "error": error})
             continue
 
         invested = h["qty"] * h["buy_price"]
@@ -480,7 +481,7 @@ def _check_required_env_vars():
     missing = [name for name, val in (("BOT_TOKEN", BOT_TOKEN), ("CHAT_ID", CHAT_ID), ("BREVO_API_KEY", BREVO_API_KEY), ("EMAIL_FROM", EMAIL_FROM), ("EMAIL_TO", EMAIL_TO)) if not val]
     if missing:
         print("Missing required environment variables:", ", ".join(missing), file=sys.stderr)
-        print("Make sure GitHub Actions secrets are set or secrets.local.json contains them.", file=sys.stderr)
+        print("Make sure GitHub Actions secrets (or local environment variables) are set.", file=sys.stderr)
         sys.exit(1)
 
 
